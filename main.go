@@ -18,55 +18,66 @@ type Product struct {
 	ProductURL string
 }
 
-type Yahoo struct {
+type Web struct {
 	c       *colly.Collector
 	jobs    chan string
 	keyword string
+	webName string
 }
 
-func (y *Yahoo) Parse(products chan Product) {
-	y.c.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
-		var product Product
-		product.Name = e.DOM.Find(".BaseGridItem__title___2HWui").Text()
-		product.ImageURL, _ = e.DOM.Find(".SquareImg_img_2gAcq").Attr("src")
-		product.ProductURL, _ = e.DOM.Find("a").Attr("href")
+// Parse the html depends on the website.
+func (w *Web) Parse(products chan Product) {
+	switch w.webName {
+	case "yahoo":
+		w.c.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
+			var product Product
+			product.Name = e.DOM.Find(".BaseGridItem__title___2HWui").Text()
+			product.ImageURL, _ = e.DOM.Find(".SquareImg_img_2gAcq").Attr("src")
+			product.ProductURL, _ = e.DOM.Find("a").Attr("href")
 
-		priceInfo := e.DOM.Find(".BaseGridItem__price___31jkj")
-		var priceStr string
-		if len(priceInfo.Find("em").Text()) > 0 {
-			priceStr = priceInfo.Find("em").Text()
-		} else {
-			priceStr = priceInfo.Text()
-		}
+			priceInfo := e.DOM.Find(".BaseGridItem__price___31jkj")
+			var priceStr string
+			if len(priceInfo.Find("em").Text()) > 0 {
+				priceStr = priceInfo.Find("em").Text()
+			} else {
+				priceStr = priceInfo.Text()
+			}
 
-		priceStr = strings.ReplaceAll(priceStr, ",", "")
-		priceStr = strings.ReplaceAll(priceStr, "$", "")
-		price, err := strconv.Atoi(priceStr)
-		if err != nil {
-			fmt.Println(err)
-		}
-		product.Price = price
-		products <- product
-	})
-}
-
-func (y *Yahoo) CreateJobs() {
-	// Create the jobs
-	for i := 0; i < 5; i++ {
-		y.jobs <- fmt.Sprintf("https://tw.buy.yahoo.com/search/product?p=%s&pg=%v", y.keyword, i)
+			priceStr = strings.ReplaceAll(priceStr, ",", "")
+			priceStr = strings.ReplaceAll(priceStr, "$", "")
+			price, err := strconv.Atoi(priceStr)
+			if err != nil {
+				fmt.Println(err)
+			}
+			product.Price = price
+			products <- product
+		})
+		// case "pchome":
 	}
-	close(y.jobs)
 }
 
-func Clawer(yahoo *Yahoo, products chan Product, wg *sync.WaitGroup) {
+// Create the jobs depend on the format of url.
+func (w *Web) CreateJobs() {
+	switch w.webName {
+	case "yahoo":
+		for i := 0; i < 5; i++ {
+			w.jobs <- fmt.Sprintf("https://tw.buy.yahoo.com/search/product?p=%s&pg=%v", w.keyword, i)
+		}
+		close(w.jobs)
+	}
+	// case "pchome":
+}
+
+// Build a clawer on each web site, and use worker(gorutine) to get each page.
+func Clawer(web *Web, products chan Product, wg *sync.WaitGroup) {
 	finishJobs := make(chan int, 5)
 
-	yahoo.Parse(products) // different
-	yahoo.c.OnError(func(_ *colly.Response, err error) {
+	web.Parse(products) // different
+	web.c.OnError(func(_ *colly.Response, err error) {
 		log.Println("Something went wrong:", err)
 	})
 
-	yahoo.c.OnScraped(func(r *colly.Response) {
+	web.c.OnScraped(func(r *colly.Response) {
 		fmt.Println("Finished", r.Request.URL)
 		finishJobs <- 1
 		if len(finishJobs) == 5 {
@@ -78,40 +89,30 @@ func Clawer(yahoo *Yahoo, products chan Product, wg *sync.WaitGroup) {
 	// Assign the jobs to the workers
 	worker := func(id int, jobs <-chan string) {
 		for url := range jobs {
-			yahoo.c.Visit(url)
+			web.c.Visit(url)
 			time.Sleep(1 * time.Second)
 		}
 	}
 	for w := 1; w <= 3; w++ {
-		go worker(w, yahoo.jobs)
+		go worker(w, web.jobs)
 	}
 
 	// Create the jobs
-	yahoo.CreateJobs() // different
+	web.CreateJobs() // different
 }
 
-// type Pchome struct {
-// 	c       *colly.Collector
-// 	jobs    chan string
-// 	keyword string
-// }
-
-// func (y *Pchome) Parse(products chan Product) {
-// 	fmt.Println("pchome parse")
-// }
-
-// func (y *Pchome) CreateJobs() {
-// 	fmt.Println("create jobs")
-// }
-
+// Looking for on different web sites. Continuous data output when found.
 func WebClawer(keyword string) {
 	products := make(chan Product, 100)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
 
-	yahoo := Yahoo{c: colly.NewCollector(), keyword: keyword, jobs: make(chan string, 5)}
-	go Clawer(&yahoo, products, wg)
+	web := Web{c: colly.NewCollector(), keyword: keyword, jobs: make(chan string, 5), webName: "yahoo"}
+	go Clawer(&web, products, wg)
+
+	// web := Web{c: colly.NewCollector(), keyword: keyword, jobs: make(chan string, 5), webName: "pchome"}
+	// go Clawer(&web, products, wg)
 
 	// Output
 	go func() {
@@ -122,9 +123,9 @@ func WebClawer(keyword string) {
 
 	wg.Wait()
 	close(products)
-	fmt.Println("Done")
 }
 
 func main() {
 	WebClawer("iphone")
+	fmt.Println("Done")
 }
