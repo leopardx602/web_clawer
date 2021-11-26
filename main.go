@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/gocolly/colly"
+	"github.com/leopardx602/web_clawer/model"
 )
 
-type Product struct {
-	Name       string
-	Price      int
-	ImageURL   string
-	ProductURL string
-}
+// type Product struct {
+// 	Name       string
+// 	Price      int
+// 	ImageURL   string
+// 	ProductURL string
+// }
 
 type Web struct {
 	c       *colly.Collector
@@ -25,12 +26,19 @@ type Web struct {
 	webName string
 }
 
+type Yahoo struct {
+	c       *colly.Collector
+	jobs    chan string
+	keyword string
+	webName string
+}
+
 // Parse the html depends on the website.
-func (w *Web) Parse(products chan Product) {
+func (w *Web) Parse(products chan model.Product) {
 	switch w.webName {
 	case "yahoo":
 		w.c.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
-			var product Product
+			var product model.Product
 			product.Name = e.DOM.Find(".BaseGridItem__title___2HWui").Text()
 			product.ImageURL, _ = e.DOM.Find(".SquareImg_img_2gAcq").Attr("src")
 			product.ProductURL, _ = e.DOM.Find("a").Attr("href")
@@ -69,7 +77,7 @@ func (w *Web) CreateJobs() {
 }
 
 // Build a clawer on each web site, and use worker(gorutine) to get each page.
-func Clawer(web *Web, products chan Product, wg *sync.WaitGroup) {
+func Clawer(web *Web, products chan model.Product, wg *sync.WaitGroup) {
 	finishJobs := make(chan int, 5)
 
 	web.Parse(products) // different
@@ -103,7 +111,7 @@ func Clawer(web *Web, products chan Product, wg *sync.WaitGroup) {
 
 // Looking for on different web sites. Continuous data output when found.
 func WebClawer(keyword string) {
-	products := make(chan Product, 100)
+	products := make(chan model.Product, 100)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
