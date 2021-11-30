@@ -1,139 +1,106 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gocolly/colly"
-	"github.com/leopardx602/web_clawer/model"
+	"github.com/leopardx602/web_crawler/model"
 )
 
-// type Product struct {
-// 	Name       string
-// 	Price      int
-// 	ImageURL   string
-// 	ProductURL string
-// }
-
-type Web struct {
-	c       *colly.Collector
-	jobs    chan string
-	keyword string
-	webName string
+type Web interface {
+	Parse(collyWorker *colly.Collector, products chan model.Product)
+	CreateJobs(jobs chan string)
 }
 
-type Yahoo struct {
-	c       *colly.Collector
-	jobs    chan string
-	keyword string
-	webName string
-}
-
-// Parse the html depends on the website.
-func (w *Web) Parse(products chan model.Product) {
-	switch w.webName {
-	case "yahoo":
-		w.c.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
-			var product model.Product
-			product.Name = e.DOM.Find(".BaseGridItem__title___2HWui").Text()
-			product.ImageURL, _ = e.DOM.Find(".SquareImg_img_2gAcq").Attr("src")
-			product.ProductURL, _ = e.DOM.Find("a").Attr("href")
-
-			priceInfo := e.DOM.Find(".BaseGridItem__price___31jkj")
-			var priceStr string
-			if len(priceInfo.Find("em").Text()) > 0 {
-				priceStr = priceInfo.Find("em").Text()
-			} else {
-				priceStr = priceInfo.Text()
-			}
-
-			priceStr = strings.ReplaceAll(priceStr, ",", "")
-			priceStr = strings.ReplaceAll(priceStr, "$", "")
-			price, err := strconv.Atoi(priceStr)
-			if err != nil {
-				fmt.Println(err)
-			}
-			product.Price = price
-			products <- product
-		})
-		// case "pchome":
-	}
-}
-
-// Create the jobs depend on the format of url.
-func (w *Web) CreateJobs() {
-	switch w.webName {
-	case "yahoo":
-		for i := 0; i < 5; i++ {
-			w.jobs <- fmt.Sprintf("https://tw.buy.yahoo.com/search/product?p=%s&pg=%v", w.keyword, i)
-		}
-		close(w.jobs)
-	}
-	// case "pchome":
-}
-
-// Build a clawer on each web site, and use worker(gorutine) to get each page.
-func Clawer(web *Web, products chan model.Product, wg *sync.WaitGroup) {
+// Build a crawler for a web site.
+// Create workers to get specified pages.
+func Crawler(ctx context.Context, web Web, products chan model.Product, wg *sync.WaitGroup) {
 	finishJobs := make(chan int, 5)
 
-	web.Parse(products) // different
-	web.c.OnError(func(_ *colly.Response, err error) {
+	// Set crawler
+	collyWorker := colly.NewCollector()
+
+	web.Parse(collyWorker, products)
+	collyWorker.OnError(func(_ *colly.Response, err error) {
 		log.Println("Something went wrong:", err)
+		finishJobs <- 1
 	})
 
-	web.c.OnScraped(func(r *colly.Response) {
+	collyWorker.OnScraped(func(r *colly.Response) {
 		fmt.Println("Finished", r.Request.URL)
 		finishJobs <- 1
-		if len(finishJobs) == 5 {
-			time.Sleep(time.Second)
-			wg.Done()
-		}
 	})
 
 	// Assign the jobs to the workers
 	worker := func(id int, jobs <-chan string) {
-		for url := range jobs {
-			web.c.Visit(url)
-			time.Sleep(1 * time.Second)
+		for {
+			select {
+			case url := <-jobs:
+				fmt.Println("go to: ", url)
+				collyWorker.Visit(url)
+				time.Sleep(1 * time.Second)
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
+
+	// Create the workers
+	var jobs = make(chan string, 5)
 	for w := 1; w <= 3; w++ {
-		go worker(w, web.jobs)
+		go worker(w, jobs)
 	}
 
 	// Create the jobs
-	web.CreateJobs() // different
+	web.CreateJobs(jobs)
+
+	for {
+		select {
+		case <-ctx.Done():
+			wg.Done()
+			return
+		default:
+			if len(finishJobs) == 5 {
+				time.Sleep(time.Second)
+				wg.Done()
+				return
+			}
+			time.Sleep(time.Second)
+		}
+	}
 }
 
 // Looking for on different web sites. Continuous data output when found.
-func WebClawer(keyword string) {
-	products := make(chan model.Product, 100)
+func WebCrawler(ctx context.Context, products chan model.Product, keyword string) {
 
+	// Set the websites to search.
+	var webs []Web
+	webs = append(webs, &model.Yahoo{Keyword: keyword})
+	webs = append(webs, &model.Pchome{Keyword: keyword})
 	wg := new(sync.WaitGroup)
-	wg.Add(1)
-
-	web := Web{c: colly.NewCollector(), keyword: keyword, jobs: make(chan string, 5), webName: "yahoo"}
-	go Clawer(&web, products, wg)
-
-	// web := Web{c: colly.NewCollector(), keyword: keyword, jobs: make(chan string, 5), webName: "pchome"}
-	// go Clawer(&web, products, wg)
-
-	// Output
-	go func() {
-		for product := range products {
-			fmt.Println(product)
-		}
-	}()
+	wg.Add(len(webs))
+	for _, web := range webs {
+		go Crawler(ctx, web, products, wg)
+	}
 
 	wg.Wait()
 	close(products)
 }
 
 func main() {
-	WebClawer("iphone")
+	// Store all collected products.
+	products := make(chan model.Product, 100)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go WebCrawler(ctx, products, "iphone")
+	for product := range products {
+		fmt.Println(product)
+	}
 	fmt.Println("Done")
 }

@@ -9,16 +9,12 @@ import (
 )
 
 type Yahoo struct {
-	c       *colly.Collector
-	jobs    chan string
-	keyword string
-	webName string
+	Keyword string
 }
 
-// Parse the html depends on the website.
-func (w *Yahoo) Parse(products chan Product) {
-
-	w.c.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
+// Parse the response depends on different websites. (html)
+func (w *Yahoo) Parse(collyWorker *colly.Collector, products chan Product) {
+	collyWorker.OnHTML(".BaseGridItem__grid___2wuJ7", func(e *colly.HTMLElement) {
 		var product Product
 		product.Name = e.DOM.Find(".BaseGridItem__title___2HWui").Text()
 		product.ImageURL, _ = e.DOM.Find(".SquareImg_img_2gAcq").Attr("src")
@@ -41,13 +37,12 @@ func (w *Yahoo) Parse(products chan Product) {
 		product.Price = price
 		products <- product
 	})
-
 }
 
-// Create the jobs depend on the format of url.
-func (w *Yahoo) CreateJobs() {
+// Create the jobs depends on the URL of different websites.
+// Each page contains 6 items.
+func (w *Yahoo) CreateJobs(jobs chan string) {
 	for i := 0; i < 5; i++ {
-		w.jobs <- fmt.Sprintf("https://tw.buy.yahoo.com/search/product?p=%s&pg=%v", w.keyword, i)
+		jobs <- fmt.Sprintf("https://tw.buy.yahoo.com/search/product?p=%s&pg=%v", w.Keyword, i)
 	}
-	close(w.jobs)
 }
